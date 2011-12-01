@@ -36,6 +36,24 @@ using namespace std;
 // #include "writeuser.hpp"
 
 
+#include <tcl.h>
+#if TCL_MAJOR_VERSION==8 && TCL_MINOR_VERSION>=4
+#define tcl_const const
+#else
+#define tcl_const
+#endif
+
+static double de_scaling=1.0; 
+
+int DE_gui_update (ClientData clientData,
+                   Tcl_Interp * interp,
+                   int argc, tcl_const char *argv[])
+{
+  de_scaling = atof(argv[1]);
+  cout << "Setting scaling to " << de_scaling << endl;
+  return TCL_OK;
+};
+
 
 
 // ****** Local function declarations ******
@@ -56,6 +74,10 @@ int Dropsexp_Init (Tcl_Interp * interp)
        << " - " << VERSION
 #endif
        << endl;
+
+  Tcl_CreateCommand (interp, "DE_gui_update", DE_gui_update,
+                     (ClientData)NULL,  
+                     (Tcl_CmdDeleteProc*) NULL);    
 
   Tcl_CreateCommand (interp, "DE_ExportMesh", DE_ExportMesh,
              (ClientData)NULL,
@@ -97,7 +119,7 @@ void WriteDropsFormat (const Mesh & mesh,
 
 {
   cout << "start writing fluent export" << endl;
-      
+  
   const MeshTopology& meshtopo = mesh.GetTopology();
   
   // Update the mesh topology structures
@@ -148,14 +170,14 @@ void WriteDropsFormat (const Mesh & mesh,
   for (i = 1; i <= np; i++)
     {
       if (curvedpoint.Test(i)){
-    continue;
+        continue;
       }
       const Point3d & p = mesh.Point(i);
 
       //outfile.width(10);
-      outfile << p.X() << " ";
-      outfile << p.Y() << " ";
-      outfile << p.Z() << "\n";
+      outfile << de_scaling * p.X() << " ";
+      outfile << de_scaling * p.Y() << " ";
+      outfile << de_scaling * p.Z() << "\n";
     }
   outfile << "))" << endl << endl;
 
@@ -208,37 +230,37 @@ void WriteDropsFormat (const Mesh & mesh,
   for (i = 1; i <= ne; i++)
     {
       if (ne > 2000)
-    {
-      if (i%2000 == 0)
         {
-          cout << (double)i/(double)ne*100. << "%" << endl;
-        }
-    } 
+          if (i%2000 == 0)
+            {
+              cout << (double)i/(double)ne*100. << "%" << endl;
+            }
+        } 
       Array<int> facesidx;
       mesh.GetTopology().GetElementFaces(i,facesidx);
       Element el = mesh.VolumeElement(i);
       //if (inverttets)
       //  el.Invert();
       
-        
+      
       //outfile << el.GetIndex() << "    ";
       if (el.GetNP() == 10) 
-    {
-        int matches = 0;
-        /*cout << "found a curved tet" << endl*/;
-        //test if element is really curved:
-        for (int j = 0; j < 6; j++){
-          Point3d pm = Center(mesh.Point(el.PNum(between[j][0]+1)),mesh.Point(el.PNum(between[j][1]+1)));
-          Vec3d d = pm - mesh.Point(el.PNum(j+4+1));
-          if (d.Length() < 1e-12){
-            matches++;
+        {
+          int matches = 0;
+          /*cout << "found a curved tet" << endl*/;
+          //test if element is really curved:
+          for (int j = 0; j < 6; j++){
+            Point3d pm = Center(mesh.Point(el.PNum(between[j][0]+1)),mesh.Point(el.PNum(between[j][1]+1)));
+            Vec3d d = pm - mesh.Point(el.PNum(j+4+1));
+            if (d.Length() < 1e-12){
+              matches++;
+            }
+          }             
+          if (matches != 6){ 
+            curvedelements.Set(i);
+            curvedels++;
           }
-        }             
-        if (matches != 6){ 
-          curvedelements.Set(i);
-          curvedels++;
         }
-      }
       else if (el.GetNP() != 4) {cout << "only tet-meshes supported in drops-export!" << endl;}
       
       //faces:
@@ -254,59 +276,59 @@ void WriteDropsFormat (const Mesh & mesh,
       //cout << "nel=" << nel << endl;
 
       for (j = 1; j <= el.GetNFaces(); j++)
-    {
-      el.GetFace(j, face);
-      face.Invert();
-      int eli2 = 0;
-      int stopsig = 0;
-          
-      for (i2 = 1; i2 <= nel; i2++)
         {
-          locind = locels.Get(i2);
-          Element el2 = mesh.VolumeElement(locind);
-
-          for (j2 = 1; j2 <= el2.GetNFaces(); j2++)
-        {
-          el2.GetFace(j2, face2);
-
-          bool same = false;
+          el.GetFace(j, face);
+          face.Invert();
+          int eli2 = 0;
+          int stopsig = 0;
           
-          for (int i = 1; i <= 3; i++)
+          for (i2 = 1; i2 <= nel; i2++)
             {
-              if (face2[(0+i)%3] == face[0] && 
-              face2[(1+i)%3] == face[1] && 
-              face2[(2+i)%3] == face[2])
+              locind = locels.Get(i2);
+              Element el2 = mesh.VolumeElement(locind);
+
+              for (j2 = 1; j2 <= el2.GetNFaces(); j2++)
+                {
+                  el2.GetFace(j2, face2);
+
+                  bool same = false;
+          
+                  for (int ii = 1; ii <= 3; ii++)
+                    {
+                      if (face2[(0+ii)%3] == face[0] && 
+                          face2[(1+ii)%3] == face[1] && 
+                          face2[(2+ii)%3] == face[2])
+                        {
+                          same = true; break;
+                        }
+                    }
+          
+                  if (same)
+                    {eli2 = locind; stopsig = 1; break;}
+                }
+              if (stopsig) break;
+            }
+          
+          if (eli2==i) cout << "error in WriteDropsFormat!!!" << endl;
+          
+          if (eli2 > i) //dont write faces two times!
             {
-              same = true; break;
+              //i: left cell, eli: right cell
+              outfile << hex << face.PNum(2) << " "
+                      << hex << face.PNum(1) << " "
+                      << hex << face.PNum(3) << " "
+                      << hex << i  << " "
+                      << hex << eli2 << "\n";
             }
+          if (eli2 == 0) 
+            {
+              surfaceelp.Append(INDEX_3(face.PNum(2),face.PNum(1),face.PNum(3)));
+              surfaceeli.Append(i);
+              int a = mesh.GetTopology().GetFace2SurfaceElement(facesidx[j-1]);
+              int u = mesh.GetFaceDescriptor(mesh.SurfaceElement(a).GetIndex()).BCProperty() - 1;
+              surfaceelbc2gensurfel[u]->Append(gse++);
             }
-          
-          if (same)
-            {eli2 = locind; stopsig = 1; break;}
         }
-          if (stopsig) break;
-        }
-          
-      if (eli2==i) cout << "error in WriteDropsFormat!!!" << endl;
-          
-      if (eli2 > i) //dont write faces two times!
-        {
-          //i: left cell, eli: right cell
-          outfile << hex << face.PNum(2) << " "
-        << hex << face.PNum(1) << " "
-        << hex << face.PNum(3) << " "
-        << hex << i  << " "
-        << hex << eli2 << "\n";
-        }
-      if (eli2 == 0) 
-        {
-          surfaceelp.Append(INDEX_3(face.PNum(2),face.PNum(1),face.PNum(3)));
-          surfaceeli.Append(i);
-        int a = mesh.GetTopology().GetFace2SurfaceElement(facesidx[j-1]);
-        int u = mesh.GetFaceDescriptor(mesh.SurfaceElement(a).GetIndex()).BCProperty() - 1;
-        surfaceelbc2gensurfel[u]->Append(gse++);
-        }
-    }
     }
   cout << curvedels << " out of " << ne << " elements are curved " << endl;
   outfile << "))" << endl;
@@ -319,9 +341,9 @@ void WriteDropsFormat (const Mesh & mesh,
     for (j = 1; j <= mysize ; j++){
       int i = (*(surfaceelbc2gensurfel[b]))[j-1] + 1;
       outfile << hex << surfaceelp.Get(i).I1() << " "
-        << hex << surfaceelp.Get(i).I2() << " "
-        << hex << surfaceelp.Get(i).I3() << " "
-        << hex << surfaceeli.Get(i) << " " << 0 << "\n";
+              << hex << surfaceelp.Get(i).I2() << " "
+              << hex << surfaceelp.Get(i).I3() << " "
+              << hex << surfaceeli.Get(i) << " " << 0 << "\n";
     }
     outfile << "))" << endl << endl;    
     
@@ -338,24 +360,24 @@ void WriteDropsFormat (const Mesh & mesh,
 
 
 
-// boundary conditions correspond to which number?
+  // boundary conditions correspond to which number?
   outfile << "(0 \"Zones:\")\n"
-      << "(45 (4 interior default-interior)())\n";
+          << "(45 (4 interior default-interior)())\n";
   for (int i = 0; i < nbcs; i++)
-      outfile << "(45 (" << 5+i << " bc" << i+1 << ")())\n";
+    outfile << "(45 (" << 5+i << " bc" << i+1 << ")())\n";
   outfile << endl;
     
-      //<< "(45 (2 wall wall)())\n"
+  //<< "(45 (2 wall wall)())\n"
 
   cout << "done" << endl;
   
-/*  static int betw_tet[6][3] =
+  /*  static int betw_tet[6][3] =
       { { 0, 1, 4 },
-        { 0, 2, 5 },
-        { 0, 3, 6 },
-        { 1, 2, 7 },
-        { 1, 3, 8 },
-        { 2, 3, 9 } };  */
+      { 0, 2, 5 },
+      { 0, 3, 6 },
+      { 1, 2, 7 },
+      { 1, 3, 8 },
+      { 2, 3, 9 } };  */
   string tmp = filename + ".2nd";
   ofstream out2ndo(tmp.c_str());
   for (int i = 1; i <= ne; i++)
@@ -364,10 +386,10 @@ void WriteDropsFormat (const Mesh & mesh,
       Element el = mesh.VolumeElement(i);
       out2ndo << el.PNum(1) << "\t" << el.PNum(2)  << "\t" << el.PNum(3) << "\t" << el.PNum(4) << "\t" ;
       for ( int j = 5; j <= 10; j ++){
-    const Point3d & p = mesh.Point(el.PNum(j));
-    out2ndo << p.X() << "\t";
-    out2ndo << p.Y() << "\t";
-    out2ndo << p.Z() << "\t";
+        const Point3d & p = mesh.Point(el.PNum(j));
+        out2ndo << p.X() << "\t";
+        out2ndo << p.Y() << "\t";
+        out2ndo << p.Z() << "\t";
       }
       out2ndo << endl;
     }
